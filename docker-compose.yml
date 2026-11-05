@@ -1,0 +1,35 @@
+# Battery Doctor – start: docker compose up -d --build
+services:
+  battery-doctor:
+    build:
+      context: .
+      target: app
+    image: battery-doctor:1.1.0
+    container_name: battery-doctor
+    user: "${AKD_UID:-10002}:${AKD_GID:-10002}"   # e.g. 1000:1000 if the backup target is a CIFS share owned by uid 1000
+    restart: unless-stopped            # autostart after a reboot
+    network_mode: host                 # reaches HA (127.0.0.1:8123) and Prometheus; web UI on port 8104
+    env_file: .env                     # HA_TOKEN (chmod 600)
+    environment:
+      TZ: Europe/Berlin
+      AKD_CONFIG: /config/config.yaml
+    volumes:
+      - ./config:/config:ro
+      - ./data:/data                   # database, reports, dossiers (kept for years)
+      - ${AKD_BACKUP_DIR:-./backup}:/backup   # daily backup (e.g. a NAS share)
+    mem_limit: 384m
+    memswap_limit: 384m
+    cpus: 0.5
+    pids_limit: 64
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

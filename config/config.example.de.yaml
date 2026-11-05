@@ -1,0 +1,135 @@
+# =====================================================================================
+#  Akku-Doktor (Battery Doctor) – Konfiguration, deutsche Vorlage
+#  Kopieren nach config/config.yaml und anpassen. Änderungen wirken nach
+#  `docker compose restart battery-doctor`. Der HA-Token steht NICHT hier, sondern in .env.
+#  Zeitangaben: 90s, 30m, 2h, 7d. Die Schlüssel sind englisch; die deutschen Schlüssel der
+#  Version 1.0 (z. B. einheiten, schaetzung) werden weiterhin verstanden.
+# =====================================================================================
+
+language: de                          # de = Meldungen, Weboberfläche, Berichte, Dossier und HA-Sensoren auf Deutsch
+# app_name: Akku-Doktor               # Titel der Meldungen und Seiten
+
+home_assistant:
+  url: http://127.0.0.1:8123          # der Container läuft im Host-Netzwerk
+  notify: notify.mobile_app_handy     # Dienst für Meldungen (Push aufs Handy)
+  persistent_notification: false      # zusätzlich als Benachrichtigung in der HA-Oberfläche
+  sensor_prefix: akku_doktor          # eigene Sensoren heißen sensor.akku_doktor_*
+
+prometheus:
+  url: http://127.0.0.1:9090          # nur zum Einlesen der Historie (leer = nicht nutzen)
+
+timezone: Europe/Berlin
+
+web:
+  port: 8104                          # Weboberfläche http://<host>:8104
+  home_url: ""                        # optional Knopf zurück zu einem Haus-Dashboard, z. B. http://192.0.2.10:8092
+  home_label: Dashboard
+
+data_path: /data                      # SQLite, Berichte, Dossiers
+
+# -------------------------------------------------------------------------------------
+#  Speicher. Jede Einheit mit eigenem SOC ist eine "unit"; "system" fasst die Gruppe mit der
+#  gemeinsamen Lade-/Entladeleistung zusammen. Beispiel: zwei gestapelte Einheiten (Master +
+#  Erweiterungsakku), Entitäten z. B. aus noah-mqtt – IDs durch die eigenen ersetzen.
+# -------------------------------------------------------------------------------------
+system:
+  name: Speichersystem (Master + Slave)
+  soc: sensor.battery_system_soc                  # Gesamt-SOC (ganze Prozent reichen)
+  charge_power: sensor.battery_charging_power     # W, Leistung in die Akkus
+  discharge_power: sensor.battery_discharge_power # W, Leistung aus den Akkus
+  solar_power: sensor.battery_solar_power         # W, nur Kontext und Tagerkennung (optional)
+  output_power: sensor.battery_output_power       # W, nur Kontext (optional)
+  discharge_limit: number.battery_discharge_limit # nur gelesen (optional)
+  battery_count: sensor.battery_number_of_batteries  # Anzahl gemeldeter Akkus (optional): Fenster zählen nur,
+                                                      # solange alle Einheiten dabei sind
+
+units:
+  master:
+    name: Master (unten, mit Wechselrichter)
+    serial: SERIENNUMMER-MASTER       # erscheint im Garantie-Dossier
+    soc: sensor.battery_bat0_soc
+    temperature: sensor.battery_bat0_temperature
+    nominal_kwh: 2.048
+    commissioned: 2026-01-01          # Kauf-/Rechnungsdatum = Garantiebeginn
+    commissioned_estimated: false     # true = Datum nur geschätzt (wird im Dossier markiert)
+  slave:
+    name: Slave (oben)
+    serial: SERIENNUMMER-SLAVE
+    soc: sensor.battery_bat1_soc
+    temperature: sensor.battery_bat1_temperature
+    nominal_kwh: 2.048
+    commissioned: 2026-01-01
+    sleeps_with_zero: true            # meldet 0 % solange er schläft -> 0 gilt als "keine Daten"
+
+# Garantiebedingungen des Herstellers (Beispielwerte: Growatt NOAH 2000)
+warranty:
+  years: 10
+  min_remaining_percent: 50           # Anspruch erst, wenn die Kapazität UNTER diesem Anteil liegt
+  max_full_cycles: 4000               # oder so viele Vollzyklen, was zuerst eintritt
+  cycles_per_year: 300                # darüber sinkt die Garantie anteilig
+  reference_fade_per_year: 1.5        # Herstellerformel: 1,5 %/Jahr ...
+  reference_fade_per_cycle: 0.011667  # ... plus 0,011667 %/Zyklus, Basis 95 % der Nennkapazität
+  reference_base_percent: 95
+  charge_temp_min: 0                  # Betriebsgrenzen laut Garantie (°C)
+  charge_temp_max: 45
+  discharge_temp_min: -20
+  discharge_temp_max: 45
+  warn_margin_points: 5               # Warnung, wenn die Untergrenze des Bereichs < Grenze + 5
+  warn_months_before_end: 12          # bzw. wenn die Prognose die Grenze vor Ablauf minus 12 Monate erreicht
+
+# -------------------------------------------------------------------------------------
+#  Kapazitätsschätzung
+# -------------------------------------------------------------------------------------
+estimation:
+  min_swing_percent: 30               # Mindest-SOC-Hub eines Messfensters
+  min_duration: 30m
+  max_gap: 10m                        # längere Datenlücke beendet ein Fenster
+  soc_band: [3, 98]                   # Fensterränder nur innerhalb dieses Bands (BMS-Kalibrierung oben/unten)
+  max_soc_jump_percent: 3             # größerer Sprung von einer Minute zur nächsten = Kalibrier-/Aufwachsprung
+  max_soc_step_percent: 5             # SOC gröber gemeldet (z. B. 10-%-Schritte) = keine verlässliche Aussage
+  min_power_w: 30
+  temp_range: [10, 35]                # nur Fenster in diesem Temperaturbereich (Mittel der Einheiten)
+  power_error_relative: 0.02          # angenommene zufällige Messunsicherheit der Leistung je Fenster
+  systematic_relative: 0.03           # mögliche gemeinsame Kalibrierabweichung des Leistungssensors
+  min_windows: 5                      # weniger saubere Fenster = keine verlässliche Aussage
+  max_uncertainty_relative: 0.08      # Bereich breiter als ±8 % = keine verlässliche Aussage
+  current_period: 60d                 # gleitender Zeitraum für die aktuelle Schätzung
+  drop_period: 14d                    # Vergleichszeitraum für "Kapazitätseinbruch"
+  drop_threshold_relative: 0.08
+  trend_min_months: 6                 # Prognose erst ab so vielen Monaten mit Schätzung
+  use_hourly_statistics: true         # ältere Historie (nur HA-Stundenstatistik) grob mit auswerten
+
+# -------------------------------------------------------------------------------------
+#  Master/Slave-Analyse (Abschnitt weglassen bei nur einer Einheit)
+# -------------------------------------------------------------------------------------
+master_slave:
+  master: master
+  slave: slave
+  throttle_flag: input_boolean.battery_difference_warning   # von einer bestehenden Automation gesetzt (nur gelesen)
+  replug_date: auto                   # Datum einer Umverkabelung (JJJJ-MM-TT) oder "auto" = aus den Daten erkennen
+  replug_search_range: [2026-01-01, 2026-12-31]
+  compare_days: 28                    # so viele Tage vor/nach dem Umstecken vergleichen
+  min_days_per_side: 5
+  worsening_days: 14                  # gleitend 14 Tage gegen die 28 Tage davor
+  worsening_points: 3
+  unequal_aging_relative: 0.05        # Einheiten-Kapazität unterscheidet sich um mehr als 5 % (Bereiche getrennt)
+
+# -------------------------------------------------------------------------------------
+#  Überwachung und Meldungen
+# -------------------------------------------------------------------------------------
+monitoring:
+  poll_interval: 60s
+  no_data_after: 2h                   # Cloud-Lücken bis ~25 min sind bei vielen Integrationen normal
+  soc_frozen_after: 3h                # SOC bewegt sich nicht, obwohl Energie fließt
+  soc_frozen_min_wh: 300
+  temp_warn_above: 40                 # Hinweis ab 40 °C, Sofortmeldung außerhalb der Garantiegrenzen
+  quiet_hours: ["22:00", "08:00"]     # nicht dringende Meldungen warten bis zum Ende der Ruhezeit
+
+report:
+  monthly_day: 1
+  monthly_time: "09:00"
+
+retention:
+  raw_days: 180                       # Minutenwerte, danach nur 15-Minuten-Werte (unbegrenzt)
+  backup_path: /backup                # tägliche Kopie der Datenbank (leer = aus)
+  backup_days: 30

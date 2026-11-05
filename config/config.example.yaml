@@ -1,0 +1,135 @@
+# =====================================================================================
+#  Battery Doctor – configuration
+#  Copy to config/config.yaml and adapt. Changes take effect after
+#  `docker compose restart battery-doctor`. The HA token is NOT here but in .env.
+#  Durations: 90s, 30m, 2h, 7d.   German keys of version 1.0 are accepted as aliases.
+#  German template with German comments: config/config.example.de.yaml
+# =====================================================================================
+
+language: en                          # en | de – notifications, web UI, reports, dossier, HA sensor names
+# app_name: Battery Doctor            # title of notifications and pages
+
+home_assistant:
+  url: http://127.0.0.1:8123          # the container runs in the host network
+  notify: notify.mobile_app_phone     # notify service for alerts (push to the phone)
+  persistent_notification: false      # additionally as a notification in the HA UI
+  sensor_prefix: battery_doctor       # own sensors are called sensor.battery_doctor_*
+
+prometheus:
+  url: http://127.0.0.1:9090          # only used to import history (empty = do not use)
+
+timezone: Europe/Berlin
+
+web:
+  port: 8104                          # web UI http://<host>:8104
+  home_url: ""                        # optional button back to a house dashboard, e.g. http://192.0.2.10:8092
+  home_label: Dashboard
+
+data_path: /data                      # SQLite, reports, dossiers
+
+# -------------------------------------------------------------------------------------
+#  Storage. Every unit with its own SOC is a "unit"; "system" is the group with the common
+#  charge/discharge power. The example shows two stacked units (master + expansion battery)
+#  whose entities come from a cloud integration such as noah-mqtt – replace the IDs with yours.
+# -------------------------------------------------------------------------------------
+system:
+  name: Storage system (master + slave)
+  soc: sensor.battery_system_soc                  # total SOC (whole percent are fine)
+  charge_power: sensor.battery_charging_power     # W, power into the batteries
+  discharge_power: sensor.battery_discharge_power # W, power out of the batteries
+  solar_power: sensor.battery_solar_power         # W, only for context and day detection (optional)
+  output_power: sensor.battery_output_power       # W, only for context (optional)
+  discharge_limit: number.battery_discharge_limit # only read (optional)
+  battery_count: sensor.battery_number_of_batteries  # number of reported batteries (optional): windows only
+                                                      # count while all units are present
+
+units:
+  master:
+    name: Master (bottom, with inverter)
+    serial: SERIAL-MASTER             # shown in the warranty dossier
+    soc: sensor.battery_bat0_soc
+    temperature: sensor.battery_bat0_temperature
+    nominal_kwh: 2.048
+    commissioned: 2026-01-01          # purchase/invoice date = start of the warranty
+    commissioned_estimated: false     # true = date only estimated (marked in the dossier)
+  slave:
+    name: Slave (top)
+    serial: SERIAL-SLAVE
+    soc: sensor.battery_bat1_soc
+    temperature: sensor.battery_bat1_temperature
+    nominal_kwh: 2.048
+    commissioned: 2026-01-01
+    sleeps_with_zero: true            # reports 0 % while asleep -> 0 counts as "no data"
+
+# Warranty terms of the manufacturer (example values: Growatt NOAH 2000 warranty terms)
+warranty:
+  years: 10
+  min_remaining_percent: 50           # claim only if the capacity is BELOW this share
+  max_full_cycles: 4000               # or this many full cycles, whichever comes first
+  cycles_per_year: 300                # above this the warranty shrinks proportionally
+  reference_fade_per_year: 1.5        # manufacturer formula: 1.5 %/year ...
+  reference_fade_per_cycle: 0.011667  # ... plus 0.011667 %/cycle, base 95 % of the nominal capacity
+  reference_base_percent: 95
+  charge_temp_min: 0                  # operating limits of the warranty (°C)
+  charge_temp_max: 45
+  discharge_temp_min: -20
+  discharge_temp_max: 45
+  warn_margin_points: 5               # warning when the lower bound of the range is < limit + 5
+  warn_months_before_end: 12          # or when the forecast reaches the limit before the end minus 12 months
+
+# -------------------------------------------------------------------------------------
+#  Capacity estimation
+# -------------------------------------------------------------------------------------
+estimation:
+  min_swing_percent: 30               # minimum SOC swing of a measurement window
+  min_duration: 30m
+  max_gap: 10m                        # a longer data gap ends a window
+  soc_band: [3, 98]                   # window edges only inside this band (BMS calibration at top/bottom)
+  max_soc_jump_percent: 3             # a larger jump from one minute to the next = calibration/wake-up jump
+  max_soc_step_percent: 5             # SOC reported more coarsely (e.g. 10 % steps) = no reliable statement
+  min_power_w: 30
+  temp_range: [10, 35]                # only windows in this temperature range (mean of the units)
+  power_error_relative: 0.02          # assumed random error of the power reading per window
+  systematic_relative: 0.03           # possible common calibration deviation of the power sensor
+  min_windows: 5                      # fewer clean windows = no reliable statement
+  max_uncertainty_relative: 0.08      # range wider than ±8 % = no reliable statement
+  current_period: 60d                 # sliding period of the current estimate
+  drop_period: 14d                    # comparison period for "capacity drop"
+  drop_threshold_relative: 0.08
+  trend_min_months: 6                 # forecast only after this many months with estimates
+  use_hourly_statistics: true         # also evaluate older history that only exists as HA hourly statistics
+
+# -------------------------------------------------------------------------------------
+#  Master/slave analysis (remove the section if you have a single unit)
+# -------------------------------------------------------------------------------------
+master_slave:
+  master: master
+  slave: slave
+  throttle_flag: input_boolean.battery_difference_warning   # set by an existing automation (only read, optional)
+  replug_date: auto                   # date of a wiring change (YYYY-MM-DD) or "auto" = detect from the data
+  replug_search_range: [2026-01-01, 2026-12-31]
+  compare_days: 28                    # compare this many days before/after
+  min_days_per_side: 5
+  worsening_days: 14                  # sliding 14 days against the 28 days before
+  worsening_points: 3
+  unequal_aging_relative: 0.05        # unit capacities differ by more than 5 % (ranges separated)
+
+# -------------------------------------------------------------------------------------
+#  Monitoring and notifications
+# -------------------------------------------------------------------------------------
+monitoring:
+  poll_interval: 60s
+  no_data_after: 2h                   # cloud gaps of up to ~25 min are normal for many integrations
+  soc_frozen_after: 3h                # SOC does not move although energy flows
+  soc_frozen_min_wh: 300
+  temp_warn_above: 40                 # notice from 40 °C, immediate alert outside the warranty limits
+  quiet_hours: ["22:00", "08:00"]     # non-urgent notifications wait until the end of the quiet hours
+
+report:
+  monthly_day: 1
+  monthly_time: "09:00"
+
+retention:
+  raw_days: 180                       # minute values, afterwards only 15-minute values (kept forever)
+  backup_path: /backup                # daily copy of the database (empty = off)
+  backup_days: 30
